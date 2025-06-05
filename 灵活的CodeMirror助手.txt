@@ -1,0 +1,234 @@
+// ==UserScript==
+// @name         灵活CodeMirror粘贴助手（从 <pre> 复制，UTF-8，中文支持）
+// @namespace    http://tampermonkey.net/
+// @version      1.5
+// @description  从选定的 <pre class="ql-syntax"> 复制代码到剪贴板（UTF-8 编码，清理无效字符，保留中文），并粘贴到任意 CodeMirror 编辑器
+// @author       Y1M0
+// @match        https://izhixinyun.com/pyTrials/*
+// @match        https://izhixinyun.com/pyTrials/*/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    console.log('灵活CodeMirror粘贴助手开始运行');
+
+    let selectedPreElement = null;
+    let highlightInterval = null;
+    let pasteButtons = [];
+
+    // 清理 Python 无效字符，保留中文字符
+    function cleanText(text) {
+        // 保持原有清理逻辑不变...
+        console.log('原始内容:', JSON.stringify(text));
+        for (let i = 0; i < text.length; i++) {
+            const code = text.charCodeAt(i);
+            if (code < 32 || (code >= 127 && code <= 159) || code >= 0xFFF0 || (code >= 0xD800 && code <= 0xDFFF)) {
+                console.warn(`原始内容检测到潜在无效字符 at position ${i}: U+${code.toString(16).padStart(4, '0')} (char: ${text[i] || 'invisible'})`);
+            }
+        }
+
+        let cleaned = text
+            .replace(/[\u200B-\u200D\uFEFF\u2028\u2029]/g, '')
+            .replace(/[\x00-\x1F\x7F-\x9F]/g, match => {
+                if (match === '\n' || match === '\t' || match === '\r') return match;
+                return '';
+            })
+            .replace(/\uFFFD/g, '')
+            .replace(/[\uD800-\uDFFF]/g, '')
+            .replace(/[\u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+            .replace(/\s+(?=\n)/g, '')
+            .replace(/\s+/g, match => {
+                if (match.includes('\n') || match.includes('\r')) return match;
+                return ' ';
+            });
+
+        console.log('清理后内容:', JSON.stringify(cleaned));
+        for (let i = 0; i < cleaned.length; i++) {
+            const code = cleaned.charCodeAt(i);
+            if (code < 32 && code !== 10 && code !== 9 && code !== 13) {
+                console.warn(`清理后仍检测到潜在无效字符 at position ${i}: U+${code.toString(16).padStart(4, '0')} (char: ${cleaned[i] || 'invisible'})`);
+            }
+        }
+
+        return cleaned;
+    }
+
+    // 高亮显示元素
+    function highlightElement(element) {
+        if (highlightInterval) clearInterval(highlightInterval);
+
+        let counter = 0;
+        const originalBackground = element.style.backgroundColor;
+
+        highlightInterval = setInterval(() => {
+            counter++;
+            if (counter > 6) { // 闪烁3次
+                clearInterval(highlightInterval);
+                element.style.backgroundColor = originalBackground;
+                highlightInterval = null;
+            } else {
+                element.style.backgroundColor = counter % 2 === 0 ? '#ffff99' : originalBackground;
+            }
+        }, 300);
+    }
+
+    // 更新按钮状态
+    function updateButtonStates() {
+        pasteButtons.forEach(button => {
+            button.style.opacity = selectedPreElement ? '1.0' : '0.6';
+            button.disabled = !selectedPreElement;
+        });
+    }
+
+    // 创建选择源按钮
+    function createSourceSelector() {
+        const selector = document.createElement('button');
+        selector.id = 'preSourceSelector';
+        selector.textContent = '选择代码源';
+        selector.style.position = 'fixed';
+        selector.style.top = '10px';
+        selector.style.right = '350px';
+        selector.style.zIndex = '1001';
+        selector.style.padding = '8px';
+        selector.style.backgroundColor = '#28a745';
+        selector.style.color = 'white';
+        selector.style.border = 'none';
+        selector.style.cursor = 'pointer';
+
+        document.body.appendChild(selector);
+
+        selector.addEventListener('click', () => {
+            // 清除之前的选择
+            if (selectedPreElement) {
+                selectedPreElement.style.outline = '';
+                selectedPreElement = null;
+                updateButtonStates();
+            }
+
+            // 高亮所有可选择的 <pre> 元素
+            const preElements = document.querySelectorAll('pre.ql-syntax[spellcheck="false"]');
+            preElements.forEach((pre, index) => {
+                pre.style.outline = '2px dashed #ff6600';
+                pre.style.cursor = 'pointer';
+
+                // 临时添加选择事件
+                const selectHandler = function() {
+                    selectedPreElement = pre;
+                    pre.style.outline = '3px solid #28a745';
+
+                    // 移除所有pre的高亮和事件
+                    preElements.forEach(p => {
+                        p.style.outline = '';
+                        p.style.cursor = '';
+                        p.removeEventListener('click', selectHandler);
+                    });
+
+                    highlightElement(pre);
+                    alert(`已选择代码源: ${pre.textContent.trim().split('\n')[0].substring(0, 30)}...`);
+                    updateButtonStates();
+                };
+
+                pre.addEventListener('click', selectHandler);
+            });
+
+            // 添加取消选择的提示
+            setTimeout(() => {
+                alert('请点击要复制的代码块（黄色高亮部分）');
+            }, 100);
+        });
+    }
+
+    // 创建粘贴按钮
+    function createPasteButtons() {
+        const cmEditors = document.querySelectorAll('.CodeMirror');
+        console.log('找到 CodeMirror 编辑器数量:', cmEditors.length);
+
+        if (cmEditors.length === 0) {
+            console.log('未找到 CodeMirror 编辑器，等待 DOM 更新...');
+            return;
+        }
+
+        cmEditors.forEach((editor, index) => {
+            const buttonId = `pasteButton${index + 1}`;
+            if (document.getElementById(buttonId)) return;
+
+            const button = document.createElement('button');
+            button.id = buttonId;
+            button.textContent = `粘贴到编辑器 ${index + 1}`;
+            button.style.position = 'fixed';
+            button.style.top = `${10 + index * 40}px`;
+            button.style.right = '200px';
+            button.style.zIndex = '1000';
+            button.style.padding = '8px';
+            button.style.backgroundColor = '#007bff';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.cursor = 'pointer';
+            button.style.opacity = '0.6';
+            button.disabled = true;
+
+            document.body.appendChild(button);
+            pasteButtons.push(button);
+
+            button.addEventListener('click', () => {
+                if (!selectedPreElement) {
+                    alert('请先点击"选择代码源"按钮并选择要复制的代码块');
+                    return;
+                }
+
+                let content = selectedPreElement.textContent || selectedPreElement.innerText;
+                content = cleanText(content);
+
+                // 验证并粘贴
+                try {
+                    const encoder = new TextEncoder();
+                    const utf8Bytes = encoder.encode(content);
+                    const decoder = new TextDecoder('utf-8', { fatal: true });
+                    const utf8Content = decoder.decode(utf8Bytes);
+
+                    navigator.clipboard.writeText(utf8Content)
+                        .then(() => {
+                            const cm = editor.CodeMirror;
+                            if (cm) {
+                                cm.replaceSelection(utf8Content);
+                                console.log(`成功粘贴到编辑器 ${index + 1}`);
+                                highlightElement(editor);
+                            } else {
+                                alert(`未找到编辑器 ${index + 1} 的 CodeMirror 实例`);
+                            }
+                        })
+                        .catch(err => {
+                            console.error('写入剪贴板失败:', err);
+                            alert('无法访问剪贴板，请在浏览器设置中允许剪贴板访问');
+                        });
+                } catch (e) {
+                    console.error('UTF-8 验证失败:', e);
+                    alert('代码内容包含无效 UTF-8 字符，无法粘贴');
+                }
+            });
+        });
+    }
+
+    // 初始化
+    function init() {
+        createSourceSelector();
+        createPasteButtons();
+
+        // 监听DOM变化（限制监听范围）
+        const observer = new MutationObserver(() => {
+            createPasteButtons();
+        });
+
+        // 只监听body子节点变化，不监听所有属性
+        observer.observe(document.body, { childList: true, subtree: false });
+    }
+
+    // 当页面加载完成后初始化
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
