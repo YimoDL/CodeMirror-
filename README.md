@@ -9,7 +9,7 @@ UTF-8 验证：确保代码在传输过程中编码一致性，防止乱码
 实时监测：动态识别新添加的 CodeMirror 编辑器，无需刷新页面
 🚀 安装步骤
 安装 Tampermonkey 浏览器扩展（支持 Chrome、Firefox、Edge 等）
-点击 此链接 安装脚本
+新建脚本，将txt文档内容粘贴进脚本保存
 在 Tampermonkey 管理界面确认脚本已启用
 📖 使用方法
 打开包含 CodeMirror 编辑器的网页（如示例网站：https://izhixinyun.com/pyTrials/*）先运行错误代码跳出提示，点击提示并且关闭。
